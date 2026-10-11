@@ -1,0 +1,21 @@
+{
+    "sourceName": "Anime Loads",
+    "iconUrl": "https://www.anime-loads.org/assets/pub/images/logo_meta.png",
+    "author": {
+        "name": "Amigo",
+        "icon": "https://raw.githubusercontent.com/superKecke/Altstore-source/main/IMG_2688.jpeg",
+        "url": "https://github.com/superKecke" 
+    },
+    "version": "1.0.0",
+    "language": "German (DUB)",
+    "streamType": "HLS",
+    "quality": "1080p",
+    "baseUrl": "https://www.anime-loads.org/",
+    "searchBaseUrl": "https://www.anime-loads.org/search=%s",
+    "scriptUrl": "https://raw.githubusercontent.com/superKecke/Module/refs/heads/main/module.js",
+    "type": "anime",
+    "downloadSupport": false, 
+    "asyncJS": true,
+    "streamAsyncJS": false,
+    "softsub": true
+}
