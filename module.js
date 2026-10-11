@@ -39,7 +39,7 @@ function absoluteUrl(url, base = BASE_URL + '/') {
 }
 
 async function getHtml(url) {
-  const response = await fetch(url, {
+  const response = await fetchv2(url, {
     headers: {
       Accept: 'text/html,application/xhtml+xml'
     }
