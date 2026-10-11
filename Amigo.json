@@ -1,9 +1,9 @@
 {
     "sourceName": "Anime Loads",
-    "iconUrl": "https://www.anime-loads.org/assets/pub/images/logo_meta.png",
+    "iconUrl": "https://www.anime-loads.org/assets/pub/images/favicon.png",
     "author": {
         "name": "Amigo",
-        "icon": "https://www.anime-loads.org/assets/pub/images/favicon.png",
+        "icon": "https://raw.githubusercontent.com/superKecke/Altstore-source/main/IMG_2688.jpeg",
         "url": "https://github.com/superKecke" 
     },
     "version": "1.0.0",
