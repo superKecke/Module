@@ -10,7 +10,9 @@ function decodeHtml(value) {
     .replace(/&gt;/g, '>')
     .replace(/&nbsp;/g, ' ')
     .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
-    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCharCode(parseInt(n, 16)));
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) =>
+      String.fromCharCode(parseInt(n, 16))
+    );
 }
 
 function stripTags(value) {
@@ -22,24 +24,38 @@ function stripTags(value) {
     .trim());
 }
 
-function absoluteUrl(url) {
+function absoluteUrl(url, base = BASE_URL + '/') {
   if (!url) return '';
-  if (/^https?:\/\//i.test(url)) return decodeHtml(url);
-  if (url.startsWith('//')) return 'https:' + url;
-  if (url.startsWith('#')) return BASE_URL + '/media/dragon-ball-z' + url;
-  return BASE_URL + (url.startsWith('/') ? '' : '/') + url;
+
+  url = decodeHtml(url.trim());
+
+  if (/^(data:|javascript:|mailto:)/i.test(url)) return '';
+
+  try {
+    return new URL(url, base).href;
+  } catch (_) {
+    return '';
+  }
 }
 
 async function getHtml(url) {
   const response = await fetch(url, {
     headers: {
-      'Accept': 'text/html,application/xhtml+xml',
-      'User-Agent': 'Mozilla/5.0'
+      Accept: 'text/html,application/xhtml+xml'
     }
   });
 
-  if (!response || response.ok === false) {
-    throw new Error('HTTP request failed' + (response ? ': ' + response.status : ''));
+  if (!response) {
+    throw new Error('Keine Antwort vom Server');
+  }
+
+  if (
+    response.ok === false ||
+    (response.status && response.status >= 400)
+  ) {
+    throw new Error(
+      'HTTP ' + response.status + ' beim Abruf von ' + url
+    );
   }
 
   return await response.text();
@@ -47,82 +63,94 @@ async function getHtml(url) {
 
 function getAttr(tag, name) {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
   const match = tag.match(
-    new RegExp('\\b' + escaped + '\\s*=\\s*(?:"([^"]*)"|\'([^\']*)\'|([^\\s>]+))', 'i')
+    new RegExp(
+      `\\b${escaped}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`,
+      'i'
+    )
   );
 
-  return match ? decodeHtml(match[1] || match[2] || match[3] || '') : '';
+  return match
+    ? decodeHtml(match[1] || match[2] || match[3] || '')
+    : '';
+}
+
+function firstImage(html) {
+  const tags = html.match(/<img\b[^>]*>/gi) || [];
+
+  for (const tag of tags) {
+    const src =
+      getAttr(tag, 'data-src') ||
+      getAttr(tag, 'data-original') ||
+      getAttr(tag, 'src');
+
+    if (src && !src.startsWith('data:')) {
+      return absoluteUrl(src);
+    }
+  }
+
+  return '';
 }
 
 async function searchResults(keyword) {
   try {
-    const query = encodeURIComponent(String(keyword || '').trim());
-    const html = await getHtml(`${BASE_URL}/search?q=${query}`);
+    const query = encodeURIComponent(
+      String(keyword || '').trim()
+    );
+
+    const html = await getHtml(
+      `${BASE_URL}/search?q=${query}`
+    );
 
     const results = [];
     const seen = new Set();
 
-    const anchorRegex =
-      /<a\b[^>]*href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>([\s\S]*?)<\/a>/gi;
+    const anchors =
+      html.match(/<a\b[^>]*>[\s\S]*?<\/a>/gi) || [];
 
-    let match;
-
-    while ((match = anchorRegex.exec(html)) !== null) {
-      const href = decodeHtml(match[1] || match[2] || match[3] || '');
+    for (const anchor of anchors) {
+      const opening = anchor.slice(0, anchor.indexOf('>') + 1);
+      const href = absoluteUrl(getAttr(opening, 'href'));
 
       if (
-        !/^\/media\//.test(href) &&
-        !/^https?:\/\/www\.anime-loads\.org\/media\//i.test(href)
+        !href ||
+        !/anime-loads\.org\/media\//i.test(href)
       ) {
         continue;
       }
 
-      const fullHref = absoluteUrl(href);
-
-      if (seen.has(fullHref)) continue;
-
-      const anchorHtml = match[4] || '';
-      const title = stripTags(anchorHtml);
+      const title = stripTags(anchor);
 
       if (!title || title.length > 180) continue;
 
-      let image = '';
-      const imgMatch = anchorHtml.match(/<img\b[^>]*>/i);
+      const cleanHref = href.split('#')[0];
 
-      if (imgMatch) {
-        image =
-          getAttr(imgMatch[0], 'data-src') ||
-          getAttr(imgMatch[0], 'src') ||
-          getAttr(imgMatch[0], 'data-original');
-      }
+      if (seen.has(cleanHref)) continue;
 
-      if (!image) {
-        const nearby = html.slice(Math.max(0, match.index - 800), match.index);
-        const imgs = [...nearby.matchAll(/<img\b[^>]*>/gi)];
+      seen.add(cleanHref);
 
-        if (imgs.length) {
-          const lastImg = imgs[imgs.length - 1][0];
+      const pos = html.indexOf(anchor);
 
-          image =
-            getAttr(lastImg, 'data-src') ||
-            getAttr(lastImg, 'src') ||
-            getAttr(lastImg, 'data-original');
-        }
-      }
+      const nearby = html.slice(
+        Math.max(0, pos - 1800),
+        Math.min(html.length, pos + 1800)
+      );
 
-      image = absoluteUrl(image);
-
-      seen.add(fullHref);
       results.push({
         title,
-        image,
-        href: fullHref
+        image: firstImage(nearby),
+        href: cleanHref
       });
     }
 
     return JSON.stringify(results);
   } catch (error) {
-    console.log('Anime Loads search error:', String(error));
+    console.log(
+      'Anime Loads search error:',
+      String(error)
+    );
+
     return JSON.stringify([]);
   }
 }
@@ -131,44 +159,104 @@ async function extractDetails(url) {
   try {
     const html = await getHtml(url);
 
-    const metaDescription = html.match(
-      /<meta\b[^>]*name\s*=\s*["']description["'][^>]*>/i
+    const metaTags = html.match(/<meta\b[^>]*>/gi) || [];
+
+    const meta = metaTags.find(tag =>
+      /\bname\s*=\s*["']description["']/i.test(tag)
     );
 
-    const description = metaDescription
-      ? getAttr(metaDescription[0], 'content')
+    const description = meta
+      ? getAttr(meta, 'content')
       : '';
 
-    const titleMatch =
+    const titleTag =
       html.match(/<h1\b[^>]*>([\s\S]*?)<\/h1>/i) ||
       html.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i);
 
-    const title = titleMatch ? stripTags(titleMatch[1]) : '';
+    const title = titleTag
+      ? stripTags(titleTag[1])
+      : '';
 
-    const yearMatch = html.match(/\b(19\d{2}|20\d{2})\b/);
-    const year = yearMatch ? yearMatch[1] : 'Unknown';
+    const details = {};
 
-    const genreMatch = html.match(
-      /Hauptgenre[\s\S]{0,500}?<[^>]*>\s*([^<]+)\s*</i
+    const rows =
+      html.match(/<tr\b[^>]*>[\s\S]*?<\/tr>/gi) || [];
+
+    for (const row of rows) {
+      const cells =
+        row.match(/<t[dh]\b[^>]*>[\s\S]*?<\/t[dh]>/gi) || [];
+
+      if (cells.length < 2) continue;
+
+      const key = stripTags(cells[0])
+        .replace(/:$/, '')
+        .trim();
+
+      const value = stripTags(cells[1]);
+
+      if (key && value) {
+        details[key] = value;
+      }
+    }
+
+    const descBlock = html.match(
+      /<div\b[^>]*id\s*=\s*["']description["'][^>]*>([\s\S]*?)<\/div>/i
     );
 
-    const genre = genreMatch ? stripTags(genreMatch[1]) : '';
+    const fallbackDescription = descBlock
+      ? stripTags(descBlock[1])
+      : '';
+
+    const yearMatch =
+      html.match(
+        /(?:Jahr|Erscheinungsjahr)[\s\S]{0,180}?(19\d{2}|20\d{2})/i
+      ) ||
+      html.match(/\b(19\d{2}|20\d{2})\b/);
+
+    const year =
+      details['Jahr'] ||
+      (yearMatch
+        ? yearMatch[1] || yearMatch[2]
+        : 'Unbekannt');
+
+    const genres = [
+      details['Hauptgenre'],
+      details['Nebengenre'],
+      details['Tags']
+    ].filter(Boolean).join(', ');
+
+    const episodeInfo = details['Episoden'] || '';
+
+    const extra = [
+      genres ? 'Genre: ' + genres : '',
+      episodeInfo ? 'Episoden: ' + episodeInfo : ''
+    ].filter(Boolean).join(' | ');
 
     return JSON.stringify({
-      description: description || 'Keine Beschreibung verfügbar.',
-      aliases: [title, genre ? 'Genre: ' + genre : '']
+      description:
+        description ||
+        fallbackDescription ||
+        'Keine Beschreibung verfügbar.',
+
+      aliases: [title, extra]
         .filter(Boolean)
         .join(' | '),
+
       airdate:
-        year === 'Unknown'
+        year === 'Unbekannt'
           ? 'Erscheinungsjahr unbekannt'
           : 'Erscheinungsjahr: ' + year
     });
   } catch (error) {
-    console.log('Anime Loads details error:', String(error));
+    console.log(
+      'Anime Loads details error:',
+      String(error)
+    );
 
     return JSON.stringify({
-      description: 'Beschreibung konnte nicht geladen werden.',
+      description:
+        'Details konnten nicht geladen werden: ' +
+        String(error),
       aliases: '',
       airdate: ''
     });
@@ -178,49 +266,109 @@ async function extractDetails(url) {
 async function extractEpisodes(url) {
   try {
     const html = await getHtml(url);
+    const releases = new Map();
 
-    const results = [];
-    const seen = new Set();
-
-    const anchorRegex =
-      /<a\b[^>]*href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>([\s\S]*?)<\/a>/gi;
+    const re =
+      /<a\b[^>]*aria-controls\s*=\s*["']downloads_episodes_(\d+)_(\d+)["'][^>]*>([\s\S]*?)<\/a>/gi;
 
     let match;
 
-    while ((match = anchorRegex.exec(html)) !== null) {
-      const href = decodeHtml(match[1] || match[2] || match[3] || '');
+    while ((match = re.exec(html)) !== null) {
+      const releaseId = parseInt(match[1], 10);
+      const episodeIndex = parseInt(match[2], 10);
 
-      // Nur Episoden-Links aus dem Streams-Bereich berücksichtigen.
-      if (!/#streams_episodes_\d+_\d+/.test(href)) continue;
+      if (
+        !Number.isFinite(releaseId) ||
+        !Number.isFinite(episodeIndex)
+      ) {
+        continue;
+      }
 
-      const title = stripTags(match[4]);
-      const numberMatch = title.match(/^\s*(\d{1,4})\b/);
+      if (!releases.has(releaseId)) {
+        releases.set(releaseId, []);
+      }
 
-      if (!numberMatch) continue;
-
-      const number = parseInt(numberMatch[1], 10);
-      const episodeHref = absoluteUrl(href);
-
-      if (!Number.isFinite(number) || seen.has(episodeHref)) continue;
-
-      seen.add(episodeHref);
-
-      results.push({
-        href: episodeHref,
-        number
+      releases.get(releaseId).push({
+        index: episodeIndex,
+        text: stripTags(match[3])
       });
     }
 
-    results.sort((a, b) => a.number - b.number);
+    if (!releases.size) {
+      return JSON.stringify([]);
+    }
 
-    return JSON.stringify(results);
+    let chosenId = [...releases.keys()]
+      .sort((a, b) => a - b)[0];
+
+    const releaseListItems =
+      html.match(/<li\b[^>]*>[\s\S]*?<\/li>/gi) || [];
+
+    for (const item of releaseListItems) {
+      const opening = item.slice(
+        0,
+        item.indexOf('>') + 1
+      );
+
+      const controls = getAttr(
+        opening,
+        'aria-controls'
+      );
+
+      const relMatch = controls.match(
+        /downloads_episodes_(\d+)_/
+      );
+
+      if (
+        relMatch &&
+        /Deutsch|German|Ger Dub|Ger-Dub|DE\b/i.test(
+          stripTags(item)
+        )
+      ) {
+        chosenId = parseInt(relMatch[1], 10);
+        break;
+      }
+    }
+
+    const episodes =
+      releases.get(chosenId) ||
+      releases.values().next().value;
+
+    const base = String(url).split('#')[0];
+    const unique = new Map();
+
+    for (
+      const episode of episodes.sort(
+        (a, b) => a.index - b.index
+      )
+    ) {
+      const number = episode.index + 1;
+
+      if (!unique.has(number)) {
+        unique.set(number, {
+          href:
+            `${base}#streams_episodes_${chosenId}_${episode.index}`,
+          number
+        });
+      }
+    }
+
+    return JSON.stringify(
+      [...unique.values()].sort(
+        (a, b) => a.number - b.number
+      )
+    );
   } catch (error) {
-    console.log('Anime Loads episodes error:', String(error));
+    console.log(
+      'Anime Loads episodes error:',
+      String(error)
+    );
+
     return JSON.stringify([]);
   }
 }
 
-// Platzhalter: Stream-Extraktion folgt nach dem Test der ersten drei Funktionen.
+// Noch nicht implementiert: Stream-Extraktion.
 async function extractStreamUrl(url) {
   console.log(
     'Anime Loads stream extraction is not implemented yet:',
